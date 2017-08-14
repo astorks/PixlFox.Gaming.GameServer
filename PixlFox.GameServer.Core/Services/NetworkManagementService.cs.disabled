@@ -1,0 +1,142 @@
+﻿using System;
+using System.Collections.Generic;
+
+using PixlFox.Networking;
+using PixlFox.GameServer.Core.Interfaces;
+using PixlFox.GameServer.Core.Services;
+using PixlFox.GameServer.Core.Components;
+using PixlFox.GameServer.Core.DependencyInjection;
+using NLog;
+using System.Security.Cryptography.X509Certificates;
+using NLog.Targets;
+using NLog.Config;
+
+namespace PixlFox.GameServer.Core.Services
+{
+    /// <summary>
+    /// Network service for sending and receiving authenticated inter-server communications.
+    /// </summary>
+    public class NetworkManagementService : IGameService
+    {
+        private static Logger logger = LogManager.GetCurrentClassLogger();
+
+        private const uint PACKET_SERVER_INFO_RESPONSE  = 0x00FF0001;
+        private const uint PACKET_LOG_RESPONSE          = 0x00FF0002;
+        private const uint PACKET_COMMAND_REQUEST       = 0x00FF0003;
+        private const uint PACKET_COMMAND_RESPONSE      = 0x00FF0004;
+
+        public const string MANAGMENT_VERSION = "1.0.0";
+
+        public NetworkServer NetworkServer { get; private set; }
+        private Dictionary<uint, Action<NetworkConnection, NetworkPacket>> regsiteredPacketHandlers = new Dictionary<uint, Action<NetworkConnection, NetworkPacket>>();
+        private List<string> allowedClientCertificates = new List<string>();
+
+        private string Address { get; }
+        private int Port { get; }
+        private X509Certificate2 Certificate { get; set; }
+
+        public NetworkManagementService(X509Certificate2 certificate, string address = "0.0.0.0", int port = 33672)
+        {
+            Certificate = certificate;
+            Address = address;
+            Port = port;
+        }
+
+        public void Initialize(GameServer gameCore)
+        {
+            NetworkServer = new NetworkServer(Address, Port, allowUdpConnection: false, requireClientAuthentication: true, certificate: Certificate);
+            NetworkServer.Start();
+            NetworkServer.ValidateCertificate += NetworkServer_ValidateCertificate;
+            NetworkServer.ReceivedNetworkPacket += ReceivedNetworkPacket;
+            NetworkServer.ClientConnected += NetworkServer_ClientConnected;
+
+            RegisterPacketHandler(PACKET_COMMAND_REQUEST, (networkConnection, packet) =>
+            {
+                var logger = LogManager.GetLogger("Remote " + networkConnection.RemoteAddress);
+                string command = packet.ReadString();
+                logger.Info("> {0}", command, networkConnection.RemoteAddress);
+
+                string response = gameCore.ExecuteCommand(command)?.ToString();
+
+                if (response != null)
+                {
+                    logger.Info("< {0}", response, networkConnection.RemoteAddress);
+                    networkConnection.Send(new NetworkPacket(PACKET_COMMAND_RESPONSE).Write(response));
+                }
+            });
+
+
+            if (LogManager.Configuration == null)
+                LogManager.Configuration = new LoggingConfiguration();
+
+            Target.Register<NetworkLoggingTarget>("Network");
+            var networkLoggingTarget = new NetworkLoggingTarget(this);
+            LogManager.Configuration.AddTarget("network", networkLoggingTarget);
+            LogManager.Configuration.LoggingRules.Add(new LoggingRule("*", networkLoggingTarget));
+        }
+
+        private bool NetworkServer_ValidateCertificate(NetworkConnection networkConnection, X509Certificate certificate, X509Chain chain, System.Net.Security.SslPolicyErrors sslPolicyErrors)
+        {
+            if (certificate != null && allowedClientCertificates.Contains(certificate.GetCertHashString()))
+                return true;
+
+            logger.Warn("Denied connection from {0}. Reason: CERT_ERROR", networkConnection.RemoteAddress);
+            return false;
+        }
+
+        public void Shutdown()
+        {
+            NetworkServer.Stop();
+        }
+
+        public void AllowCertificate(string certificateHash)
+        {
+            this.allowedClientCertificates.Add(certificateHash);
+        }
+
+        public void RevokeCertificate(string certificateHash)
+        {
+            this.allowedClientCertificates.Remove(certificateHash);
+        }
+
+        public void RegisterPacketHandler(uint packetId, Action<NetworkConnection, NetworkPacket> onReceivedPacket)
+        {
+            regsiteredPacketHandlers[packetId] = onReceivedPacket;
+        }
+
+        private void ReceivedNetworkPacket(NetworkConnection networkConnection, NetworkPacket packet)
+        {
+            if (regsiteredPacketHandlers.ContainsKey(packet.PacketId))
+                regsiteredPacketHandlers[packet.PacketId].Invoke(networkConnection, packet);
+        }
+
+        private void NetworkServer_ClientConnected(NetworkConnection networkConnection)
+        {
+            logger.Info("New connection from {0}.", networkConnection.RemoteAddress);
+
+            networkConnection.Send(new NetworkPacket(PACKET_SERVER_INFO_RESPONSE).Write(MANAGMENT_VERSION));
+        }
+
+        public void SendLogMessage(string message)
+        {
+            this.NetworkServer.Broadcast(new NetworkPacket(PACKET_LOG_RESPONSE).Write(message));
+        }
+
+        [Target("Network")]
+        public sealed class NetworkLoggingTarget : TargetWithLayout
+        {
+            public NetworkLoggingTarget(NetworkManagementService networkManagementService)
+            {
+                NetworkManagementService = networkManagementService;
+            }
+
+            private NetworkManagementService NetworkManagementService { get; }
+
+            protected override void Write(LogEventInfo logEvent)
+            {
+                string logMessage = this.Layout.Render(logEvent);
+                NetworkManagementService.SendLogMessage(logMessage);
+            }
+        }
+    }
+}

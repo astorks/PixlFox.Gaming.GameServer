@@ -1,0 +1,32 @@
+﻿using System.Numerics;
+
+using PixlFox.Networking;
+
+namespace PixlFox.GameServer.Core.Utilities
+{
+    public static class NetworkExtentions
+    {
+        public static void WriteVector2(this NetworkPacket packet, Vector2 val)
+        {
+            packet.Write(val.X);
+            packet.Write(val.Y);
+        }
+
+        public static void WriteVector3(this NetworkPacket packet, Vector3 val)
+        {
+            packet.Write(val.X);
+            packet.Write(val.Y);
+            packet.Write(val.Z);
+        }
+
+        public static Vector2 ReadVector2(this NetworkPacket packet)
+        {
+            return new Vector2(packet.ReadSingle(), packet.ReadSingle());
+        }
+
+        public static Vector3 ReadVector3(this NetworkPacket packet)
+        {
+            return new Vector3(packet.ReadSingle(), packet.ReadSingle(), packet.ReadSingle());
+        }
+    }
+}

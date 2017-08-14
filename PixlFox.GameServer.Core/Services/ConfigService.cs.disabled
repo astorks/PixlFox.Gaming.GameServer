@@ -1,0 +1,43 @@
+﻿using System.Collections.Generic;
+using System.IO;
+
+using Newtonsoft.Json;
+
+using PixlFox.GameServer.Core.Interfaces;
+
+namespace PixlFox.GameServer.Core.Services
+{
+    public class ConfigService : IGameService
+    {
+        private Dictionary<string, object> configData = new Dictionary<string, object>();
+
+        public void Initialize(Core.GameServer gameCore)
+        {
+            if (File.Exists("./cfg.json"))
+                configData = JsonConvert.DeserializeObject<Dictionary<string, object>>(File.ReadAllText("./cfg.json"));
+        }
+
+        public void Shutdown()
+        {
+            File.WriteAllText("./cfg.json", JsonConvert.SerializeObject(configData));
+        }
+
+        public void SetValue<T>(string key, T val)
+        {
+            configData[key] = val;
+        }
+
+        public T GetValue<T>(string key, T defaultVal)
+        {
+            if (configData.ContainsKey(key))
+                return (T)configData[key];
+            else
+                return defaultVal;
+        }
+
+        public T GetValue<T>(string key)
+        {
+            return GetValue<T>(key, default(T));
+        }
+    }
+}

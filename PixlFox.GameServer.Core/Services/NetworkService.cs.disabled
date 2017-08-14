@@ -1,0 +1,55 @@
+﻿using System;
+using System.Collections.Generic;
+
+using PixlFox.Networking;
+using PixlFox.GameServer.Core.Interfaces;
+using PixlFox.GameServer.Core.Services;
+using PixlFox.GameServer.Core.Components;
+using PixlFox.GameServer.Core.DependencyInjection;
+using NLog;
+using System.Security.Cryptography.X509Certificates;
+
+namespace PixlFox.GameServer.Core.Services
+{
+    public class NetworkService : IGameService
+    {
+        private static Logger logger = LogManager.GetCurrentClassLogger();
+
+        public NetworkServer NetworkServer { get; private set; }
+        private Dictionary<uint, Action<NetworkConnection, NetworkPacket>> regsiteredPacketHandlers = new Dictionary<uint, Action<NetworkConnection, NetworkPacket>>();
+
+        private string Address { get; }
+        private int Port { get; }
+        private X509Certificate2 Certificate { get; }
+
+        public NetworkService(string address = "0.0.0.0", int port = 33671, X509Certificate2 certificate = null)
+        {
+            Address = address;
+            Port = port;
+            Certificate = certificate;
+        }
+
+        public void Initialize(Core.GameServer gameCore)
+        {
+            NetworkServer = new NetworkServer(Address, Port, Certificate);
+            NetworkServer.Start();
+            NetworkServer.ReceivedNetworkPacket += ReceivedNetworkPacket;
+        }
+
+        public void Shutdown()
+        {
+            NetworkServer.Stop();
+        }
+
+        public void RegisterPacketHandler(uint packetId, Action<NetworkConnection, NetworkPacket> onReceivedPacket)
+        {
+            regsiteredPacketHandlers[packetId] = onReceivedPacket;
+        }
+
+        private void ReceivedNetworkPacket(NetworkConnection networkConnection, NetworkPacket packet)
+        {
+            if(regsiteredPacketHandlers.ContainsKey(packet.PacketId))
+                regsiteredPacketHandlers[packet.PacketId].Invoke(networkConnection, packet);
+        }
+    }
+}
